@@ -19,7 +19,8 @@ Your system needs a few basic disk utilities (`ntfs-3g`, `parted`, `dosfstools`)
 
   Arch Linux / Manjaro:
 
-   sudo pacman -S --noconfirm ntfs-3g parted dosfstools
+  sudo pacman -S ntfsprogs
+
 
   Fedora:
 
