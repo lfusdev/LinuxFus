@@ -25,7 +25,7 @@ Your system needs a few basic disk utilities (`ntfs-3g`, `parted`, `dosfstools`)
 
   sudo dnf install -y ntfs-3g parted dosfstools
 
-  How to Use
+How to Use
 Go to the Releases section on the right side of this GitHub page and download the latest LinuxFus-x86_64.AppImage.
 
 Open a terminal where the file is located and make it executable:
