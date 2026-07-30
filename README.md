@@ -14,28 +14,28 @@ LinuxFus is a simple Python script designed to help Linux users easily create bo
 Your system needs a few basic disk utilities (`ntfs-3g`, `parted`, `dosfstools`) to format FAT32 and NTFS partitions. Install them using the command for your Linux distribution:
 
 * **Debian / Ubuntu / Linux Mint:** 
-  ```bash
-  sudo apt update && sudo apt install -y ntfs-3g parted dosfstools
+  
+  ``sudo apt update && sudo apt install -y ntfs-3g parted dosfstools``
 
-  Arch Linux / Manjaro:
+  **Arch Linux / Manjaro:**
 
-  sudo pacman -S ntfsprogs
+  ``sudo pacman -S ntfsprogs``
 
 
-  Fedora:
+  **Fedora:**
 
-  sudo dnf install -y ntfs-3g parted dosfstools
+  ``sudo dnf install -y ntfs-3g parted dosfstools``
 
 How to Use
 Go to the Releases section on the right side of this GitHub page and download the latest LinuxFus-x86_64.AppImage.
 
 Open a terminal where the file is located and make it executable:
 
- chmod +x LinuxFus-x86_64.AppImage
+ ``chmod +x LinuxFus-x86_64.AppImage``
 
  Run the AppImage with sudo privileges (required for raw disk partitioning and mounting):
 
-  sudo ./LinuxFus-x86_64.AppImage
+  ``sudo ./LinuxFus-x86_64.AppImage``
 
   Select your USB drive and Windows ISO file from the menu, then click START.
 
