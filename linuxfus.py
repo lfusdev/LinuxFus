@@ -14,6 +14,7 @@ if sys.stderr is None:
     sys.stderr = open(os.devnull, 'w')
 
 cancel_requested = False
+iso_action_mode = "select"
 
 def is_root():
     return os.geteuid() == 0
@@ -26,14 +27,28 @@ if __name__ == "__main__" and not is_root():
 
 def get_asset_path(relative_path):
     appimage_assets = os.environ.get("APPIMAGE_ASSETS_DIR")
-    if appimage_assets and os.path.exists(appimage_assets):
-        return appimage_assets
+    if appimage_assets and os.path.exists(os.path.join(appimage_assets, relative_path)):
+        return os.path.join(appimage_assets, relative_path)
     
     if hasattr(sys, '_MEIPASS'):
         base_path = sys._MEIPASS
     else:
         base_path = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base_path, relative_path)
+
+def open_iso_downloader():
+    downloader_script = get_asset_path("download.pyw")
+    
+    if not os.path.exists(downloader_script):
+        downloader_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "download.pyw")
+        
+    if os.path.exists(downloader_script):
+        try:
+            subprocess.Popen(["python3", downloader_script])
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to launch ISO Downloader:\n{str(e)}")
+    else:
+        messagebox.showerror("Error", f"Could not find download.pyw at:\n{downloader_script}")
 
 def patch_efi_data(binary_data, old_name="rufus", new_name="lfus_"):
     if len(old_name) != len(new_name):
@@ -42,14 +57,16 @@ def patch_efi_data(binary_data, old_name="rufus", new_name="lfus_"):
     old_utf16, new_utf16 = old_name.encode('utf-16le'), new_name.encode('utf-16le')
     return binary_data.replace(old_ascii, new_ascii).replace(old_utf16, new_utf16)
 
-def force_unmount_leftovers():
+def force_unmount_leftovers(dev_node=None):
     mounts = ["/tmp/lfus_boot", "/tmp/lfus_data", "/tmp/lfus_iso"]
     for m in mounts:
-        subprocess.run(["umount", "-l", m], capture_output=True)
+        subprocess.run(["umount", "-f", "-l", m], capture_output=True)
+    if dev_node:
+        subprocess.run(f"umount -f -l {dev_node}* 2>/dev/null", shell=True, capture_output=True)
 
 app = tk.Tk()
-app.title("LinuxFus v1.1 (Linux)")
-app.geometry("440x670")
+app.title("LinuxFus v1.2 (Linux)")
+app.geometry("440x700")
 app.resizable(False, False)
 
 style = ttk.Style()
@@ -96,6 +113,23 @@ def select_iso():
         label_entry.delete(0, tk.END)
         label_entry.insert(0, custom_label if custom_label else "LINUXFUS")
 
+def handle_iso_action():
+    if iso_action_mode == "select":
+        select_iso()
+    else:
+        open_iso_downloader()
+
+def set_iso_mode(mode):
+    global iso_action_mode
+    iso_action_mode = mode
+    if mode == "select":
+        btn_iso_action.config(text="BROWSE")
+    else:
+        btn_iso_action.config(text="INSTALL")
+
+def show_iso_menu():
+    iso_menu.post(btn_iso_arrow.winfo_rootx(), btn_iso_arrow.winfo_rooty() + btn_iso_arrow.winfo_height())
+
 def update_progress(val, text=""):
     progress['value'] = val
     if text:
@@ -105,14 +139,13 @@ def update_progress(val, text=""):
 def reset_usb_worker(selected_drive):
     try:
         dev_node = selected_drive.split()[0]
-        update_progress(10, "Cleaning: Force unmounting existing volumes...")
+        update_progress(10, "Cleaning: Unmounting drive partitions...")
         
-        force_unmount_leftovers()
-        subprocess.run(f"umount -l {dev_node}* 2>/dev/null", shell=True, capture_output=True)
+        force_unmount_leftovers(dev_node)
         time.sleep(1)
 
-        update_progress(30, "Cleaning: Wiping partition tables...")
-        subprocess.run(["wipefs", "-a", "-f", dev_node], check=True)
+        update_progress(30, "Cleaning: Wiping filesystem signatures...")
+        subprocess.run(["wipefs", "-a", "-f", dev_node], capture_output=True)
         time.sleep(1)
         
         update_progress(60, "Cleaning: Creating new MBR partition table...")
@@ -126,6 +159,8 @@ def reset_usb_worker(selected_drive):
         
         update_progress(85, "Cleaning: Formatting as FAT32...")
         subprocess.run(["mkfs.vfat", "-F32", "-n", "RESET_USB", p1], check=True)
+
+        subprocess.run(["sync"])
 
         update_progress(100, "USB Reset Complete! Single FAT32 partition ready.")
         messagebox.showinfo("Success", "USB Drive successfully restored to factory defaults!")
@@ -247,9 +282,7 @@ def write_iso_worker(selected_drive, iso_path):
         p2 = f"{dev_node}p2" if ("nvme" in dev_node or "mmcblk" in dev_node) else f"{dev_node}2"
 
         update_progress(5, "1/5: Cleaning lingering mounts...")
-        force_unmount_leftovers()
-        
-        subprocess.run(f"umount -l {dev_node}* 2>/dev/null", shell=True, capture_output=True)
+        force_unmount_leftovers(dev_node)
         time.sleep(1)
 
         if cancel_requested: raise Exception("Operation cancelled by user.")
@@ -299,14 +332,15 @@ def write_iso_worker(selected_drive, iso_path):
 
         if cancel_requested: raise Exception("Operation cancelled by user.")
 
-        update_progress(90, "5/5: Finalizing & unmounting...")
-        force_unmount_leftovers()
+        update_progress(90, "5/5: Syncing buffers & unmounting...")
+        subprocess.run(["sync"])
+        force_unmount_leftovers(dev_node)
 
-        update_progress(100, "Process Completed Successfully! 🎉")
+        update_progress(100, "Process Completed Successfully!")
         messagebox.showinfo("Success", "Bootable USB Drive is Ready!")
 
     except Exception as e:
-        force_unmount_leftovers()
+        force_unmount_leftovers(dev_node)
         if "cancelled" in str(e).lower():
             update_progress(0, "Operation Cancelled!")
             messagebox.showwarning("Cancelled", "Operation was cancelled by user.")
@@ -350,16 +384,17 @@ drive_frame.pack(fill="x", padx=15, pady=(15, 2))
 
 tk.Label(drive_frame, text="Target Device / Drive:", font=("Segoe UI", 9, "bold")).pack(side="left")
 
-btn_reset = ttk.Button(drive_frame, text="🧹 Clean USB", width=12, command=reset_usb_action)
+btn_reset = ttk.Button(drive_frame, text="Clean USB", width=12, command=reset_usb_action)
 btn_reset.pack(side="right", padx=(5, 0))
 
-btn_refresh = ttk.Button(drive_frame, text="🔄 Refresh", width=9, command=refresh_drives)
+btn_refresh = ttk.Button(drive_frame, text="Refresh", width=9, command=refresh_drives)
 btn_refresh.pack(side="right")
 
 drive_cb = ttk.Combobox(app, state="readonly")
 drive_cb.pack(fill="x", padx=15)
 
 tk.Label(app, text="Boot Selection (ISO Image):", font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=15, pady=(10, 2))
+
 iso_frame = tk.Frame(app)
 iso_frame.pack(fill="x", padx=15)
 
@@ -367,8 +402,18 @@ iso_entry = tk.Entry(iso_frame)
 iso_entry.insert(0, "Select an ISO file...")
 iso_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
 
-btn_browse = ttk.Button(iso_frame, text="BROWSE", command=select_iso)
-btn_browse.pack(side="right")
+btn_split_frame = tk.Frame(iso_frame)
+btn_split_frame.pack(side="right")
+
+btn_iso_action = ttk.Button(btn_split_frame, text="BROWSE", width=9, command=handle_iso_action)
+btn_iso_action.pack(side="left")
+
+btn_iso_arrow = ttk.Button(btn_split_frame, text="v", width=2, command=show_iso_menu)
+btn_iso_arrow.pack(side="right")
+
+iso_menu = tk.Menu(app, tearoff=0)
+iso_menu.add_command(label="SELECT (BROWSE)", command=lambda: set_iso_mode("select"))
+iso_menu.add_command(label="DOWNLOAD (INSTALL)", command=lambda: set_iso_mode("download"))
 
 tk.Label(app, text="Partition Scheme:", font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=15, pady=(10, 2))
 partition_cb = ttk.Combobox(app, values=["GPT (UEFI)"], state="readonly")
