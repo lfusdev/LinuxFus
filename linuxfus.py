@@ -16,15 +16,38 @@ if sys.stderr is None:
 cancel_requested = False
 iso_action_mode = "select"
 
-def is_root():
-    return os.geteuid() == 0
-
 if __name__ == "__main__" and not is_root():
-    root = tk.Tk()
-    root.withdraw()
-    messagebox.showerror("Permission Error", "LinuxFus requires root privileges.\nPlease run the AppImage directly.")
-    sys.exit(1)
+    try:
+        if "APPIMAGE" in os.environ:
+            target_bin = os.environ["APPIMAGE"]
+        elif hasattr(sys, '_MEIPASS'):
+            target_bin = os.path.abspath(sys.argv[0])
+        else:
+            target_bin = sys.executable
 
+        xauth = os.environ.get('XAUTHORITY', os.path.expanduser('~/.Xauthority'))
+        display = os.environ.get('DISPLAY', ':0')
+
+        cmd = [
+            "pkexec",
+            "env",
+            f"DISPLAY={display}",
+            f"XAUTHORITY={xauth}",
+            target_bin
+        ]
+
+        if not hasattr(sys, '_MEIPASS') and "APPIMAGE" not in os.environ:
+            cmd.append(os.path.abspath(__file__))
+
+        cmd.extend(sys.argv[1:])
+
+        subprocess.run(cmd, check=True)
+    except Exception as e:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror("Permission Error", f"Failed to acquire root privileges or action was cancelled:\n{str(e)}")
+    sys.exit(0)
+    
 def get_asset_path(relative_path):
     appimage_assets = os.environ.get("APPIMAGE_ASSETS_DIR")
     if appimage_assets and os.path.exists(os.path.join(appimage_assets, relative_path)):
@@ -68,6 +91,14 @@ app = tk.Tk()
 app.title("LinuxFus v1.2 (Linux)")
 app.geometry("440x700")
 app.resizable(False, False)
+
+icon_path = get_asset_path("icon.png")
+if os.path.exists(icon_path):
+    try:
+        app_icon = tk.PhotoImage(file=icon_path)
+        app.iconphoto(False, app_icon)
+    except Exception as e:
+        print("Failed to load icon:", e)
 
 style = ttk.Style()
 if 'clam' in style.theme_names():
@@ -248,13 +279,15 @@ def copy_and_patch_assets(assets_dir, target_drive):
     global cancel_requested
     if os.path.exists(assets_dir):
         for root, dirs, files in os.walk(assets_dir):
-            if cancel_requested: raise Exception("Operation cancelled by user.")
+            if cancel_requested:
+                raise Exception("Operation cancelled by user.")
             rel_path = os.path.relpath(root, assets_dir)
             dest_dir = os.path.join(target_drive, rel_path) if rel_path != "." else target_drive
             os.makedirs(dest_dir, exist_ok=True)
 
             for f in files:
-                if cancel_requested: raise Exception("Operation cancelled by user.")
+                if cancel_requested:
+                    raise Exception("Operation cancelled by user.")
                 src_file = os.path.join(root, f)
                 dst_file = os.path.join(dest_dir, f)
 
