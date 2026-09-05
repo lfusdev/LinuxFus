@@ -1,11 +1,10 @@
-import os, ssl, threading, tkinter as tk
+import os, time, threading, subprocess, shutil
+import urllib.request
+import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from urllib.request import urlopen, Request
-
-ssl_context = ssl.create_default_context()
-ssl_context.check_hostname, ssl_context.verify_mode = False, ssl.CERT_NONE
 
 ISO_DATA = {
+    "Debian KDE": "https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid/debian-live-13.6.0-amd64-kde.iso",
     "CachyOS": "https://cdn77.cachyos.org/ISO/desktop/260628/cachyos-desktop-linux-260628.iso",
     "Arch Linux": "https://arch-mirror.brightlight.today/iso/2026.07.01/archlinux-2026.07.01-x86_64.iso",
     "Ubuntu Desktop": "https://releases.ubuntu.com/26.04/ubuntu-26.04-desktop-amd64.iso",
@@ -17,15 +16,15 @@ class ISODownloaderApp:
     def __init__(self, root):
         self.root = root
         self.root.title("ISO Downloader")
-        self.root.geometry("440x300")
+        self.root.geometry("440x330")
         self.root.resizable(False, False)
-        
-      
+
         script_dir = os.path.dirname(os.path.abspath(__file__))
         self.download_dir = tk.StringVar(value=script_dir)
-        
+
         self.active_download = None
         self.cancel_requested = False
+        self.process = None
         self.download_buttons = {}
         self.create_widgets()
 
@@ -42,7 +41,7 @@ class ISODownloaderApp:
             row = tk.Frame(f_list)
             row.pack(fill="x", pady=2)
             tk.Label(row, text=name, font=("Segoe UI", 9), anchor="w").pack(side="left")
-            btn = tk.Button(row, text="Download", bg="#16a34a", fg="white", font=("Segoe UI", 8, "bold"), width=8, 
+            btn = tk.Button(row, text="Download", bg="#16a34a", fg="white", font=("Segoe UI", 8, "bold"), width=8,
                             command=lambda n=name, u=url: self.handle_click(n, u))
             btn.pack(side="right")
             self.download_buttons[name] = btn
@@ -62,6 +61,8 @@ class ISODownloaderApp:
         if self.active_download == name:
             self.cancel_requested = True
             self.lbl_status.config(text="Cancelling...")
+            if self.process:
+                self.process.terminate()
         elif not self.active_download:
             self.start_download(name, url)
 
@@ -74,49 +75,89 @@ class ISODownloaderApp:
         self.cancel_requested = False
         self.set_other_buttons_state(name, "disabled")
         self.download_buttons[name].config(text="Cancel", bg="#dc2626")
-        threading.Thread(target=self.download_file, args=(name, url), daemon=True).start()
+        threading.Thread(target=self.download_file_robust, args=(name, url), daemon=True).start()
 
-    def download_file(self, name, url):
+    def get_remote_file_size(self, url):
+        try:
+            req = urllib.request.Request(url, method='HEAD', headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                length = resp.headers.get('content-length')
+                return int(length) if length else 0
+        except:
+            return 0
+
+    def download_file_robust(self, name, url):
         fn = url.split("?")[0].split("/")[-1]
         save_dir = self.download_dir.get()
-        
-        
         os.makedirs(save_dir, exist_ok=True)
-        
         save_path = os.path.join(save_dir, fn if fn.endswith(".iso") else f"{name.lower().replace(' ', '_')}.iso")
-        self.lbl_status.config(text=f"Connecting: {name}")
-        self.progress["value"] = 0
-        req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        
+
+        self.root.after(0, lambda: self.lbl_status.config(text=f"Connecting: {name}"))
+        self.root.after(0, lambda: self.progress.config(value=0))
+
+
+        total_size = self.get_remote_file_size(url)
+
+
+        env = os.environ.copy()
+        env.pop('LD_LIBRARY_PATH', None)
+
+
+        if shutil.which("curl"):
+            cmd = ["curl", "-L", "-k", "-s", "-o", save_path, url]
+        elif shutil.which("wget"):
+            cmd = ["wget", "--no-check-certificate", "-q", "-O", save_path, url]
+        else:
+            self.root.after(0, lambda: messagebox.showerror("Error", "Neither curl nor wget was found on the system."))
+            self.root.after(0, lambda: self._reset_ui(name))
+            return
+
         try:
-            with urlopen(req, context=ssl_context) as resp, open(save_path, "wb") as out:
-                total, done = int(resp.headers.get("Content-Length", 0)), 0
-                while buf := resp.read(131072):
-                    if self.cancel_requested:
-                        break
-                    done += len(buf)
-                    out.write(buf)
-                    if total > 0:
-                        pct = (done / total) * 100
-                        self.progress["value"] = pct
-                        self.lbl_status.config(text=f"{name}: {pct:.1f}% ({done//1048576}/{total//1048576} MB)")
+
+            self.process = subprocess.Popen(cmd, env=env)
+
+
+            while self.process.poll() is None:
+                if self.cancel_requested:
+                    self.process.terminate()
+                    break
+
+                if os.path.exists(save_path) and total_size > 0:
+                    current_size = os.path.getsize(save_path)
+                    pct = min((current_size / total_size) * 100, 99.9)
+                    self.root.after(0, self._update_progress, name, pct)
+
+                time.sleep(0.3)
 
             if self.cancel_requested:
                 if os.path.exists(save_path): os.remove(save_path)
-                self.lbl_status.config(text="Download cancelled.")
-                self.progress["value"] = 0
+                self.root.after(0, lambda: self.lbl_status.config(text="Download cancelled."))
+                self.root.after(0, lambda: self.progress.config(value=0))
+            elif self.process.returncode == 0:
+                self.root.after(0, lambda: self.progress.config(value=100))
+                self.root.after(0, lambda: self.lbl_status.config(text="Completed!"))
+                self.root.after(0, lambda: messagebox.showinfo("Success", f"{os.path.basename(save_path)} downloaded successfully."))
             else:
-                self.lbl_status.config(text="Completed!")
-                messagebox.showinfo("Success", f"{os.path.basename(save_path)} downloaded successfully.")
+                raise Exception(f"Download process failed with exit code {self.process.returncode}")
 
         except Exception as e:
-            self.lbl_status.config(text="An error occurred!")
-            messagebox.showerror("Error", str(e))
+            if not self.cancel_requested:
+                if os.path.exists(save_path): os.remove(save_path)
+                self.root.after(0, lambda: self.lbl_status.config(text="An error occurred!"))
+                self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
         finally:
-            self.active_download = None
-            self.cancel_requested = False
-            self.set_other_buttons_state(name, "normal")
-            self.download_buttons[name].config(text="Download", bg="#16a34a")
+            self.root.after(0, lambda: self._reset_ui(name))
+
+    def _update_progress(self, name, pct):
+        self.progress["value"] = pct
+        self.lbl_status.config(text=f"{name}: {pct:.1f}%")
+
+    def _reset_ui(self, name):
+        self.active_download = None
+        self.process = None
+        self.cancel_requested = False
+        self.set_other_buttons_state(name, "normal")
+        self.download_buttons[name].config(text="Download", bg="#16a34a")
 
 def open_iso_downloader(parent=None):
     win = tk.Toplevel(parent) if parent else tk.Tk()
