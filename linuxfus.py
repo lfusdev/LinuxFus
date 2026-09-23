@@ -5,16 +5,61 @@ import subprocess
 import threading
 import shutil
 import time
+import json
+import hashlib
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-if sys.stdout is None:
-    sys.stdout = open(os.devnull, 'w')
-if sys.stderr is None:
-    sys.stderr = open(os.devnull, 'w')
-
 cancel_requested = False
 iso_action_mode = "select"
+current_lang = "tr"
+translations = {}
+
+def is_root():
+    return os.geteuid() == 0
+
+def get_asset_path(relative_path):
+    appimage_assets = os.environ.get("APPIMAGE_ASSETS_DIR")
+    if appimage_assets and os.path.exists(os.path.join(appimage_assets, relative_path)):
+        return os.path.join(appimage_assets, relative_path)
+
+    if hasattr(sys, '_MEIPASS'):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
+
+def get_available_languages():
+    locales_dir = get_asset_path("locales")
+    if not os.path.exists(locales_dir):
+        locales_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "locales")
+
+    langs = []
+    if os.path.exists(locales_dir):
+        for file in os.listdir(locales_dir):
+            if file.endswith(".json"):
+                langs.append(os.path.splitext(file)[0])
+    return sorted(langs) if langs else ["tr", "en", "de"]
+
+def load_translations(lang):
+    global translations
+    lang_file = get_asset_path(f"locales/{lang}.json")
+    if not os.path.exists(lang_file):
+        lang_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"locales/{lang}.json")
+
+    if os.path.exists(lang_file):
+        try:
+            with open(lang_file, "r", encoding="utf-8") as f:
+                translations = json.load(f)
+        except Exception:
+            translations = {}
+    else:
+        translations = {}
+
+def tr(key):
+    return translations.get(key, key)
+
+load_translations(current_lang)
 
 if __name__ == "__main__" and not is_root():
     try:
@@ -47,24 +92,18 @@ if __name__ == "__main__" and not is_root():
         root.withdraw()
         messagebox.showerror("Permission Error", f"Failed to acquire root privileges or action was cancelled:\n{str(e)}")
     sys.exit(0)
-    
-def get_asset_path(relative_path):
-    appimage_assets = os.environ.get("APPIMAGE_ASSETS_DIR")
-    if appimage_assets and os.path.exists(os.path.join(appimage_assets, relative_path)):
-        return os.path.join(appimage_assets, relative_path)
-    
-    if hasattr(sys, '_MEIPASS'):
-        base_path = sys._MEIPASS
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_path, relative_path)
+
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, 'w')
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, 'w')
 
 def open_iso_downloader():
     downloader_script = get_asset_path("download.pyw")
-    
+
     if not os.path.exists(downloader_script):
         downloader_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "download.pyw")
-        
+
     if os.path.exists(downloader_script):
         try:
             subprocess.Popen(["python3", downloader_script])
@@ -87,9 +126,28 @@ def force_unmount_leftovers(dev_node=None):
     if dev_node:
         subprocess.run(f"umount -f -l {dev_node}* 2>/dev/null", shell=True, capture_output=True)
 
+def calculate_iso_sha256(filepath, progress_callback=None):
+    sha256 = hashlib.sha256()
+    total_size = os.path.getsize(filepath)
+    read_size = 0
+    buffer_size = 4 * 1024 * 1024
+
+    with open(filepath, 'rb') as f:
+        while True:
+            chunk = f.read(buffer_size)
+            if not chunk:
+                break
+            sha256.update(chunk)
+            read_size += len(chunk)
+            if progress_callback:
+                pct = int((read_size / total_size) * 100)
+                progress_callback(pct)
+
+    return sha256.hexdigest().lower()
+
 app = tk.Tk()
-app.title("LinuxFus v1.2 (Linux)")
-app.geometry("440x700")
+app.title(tr("window_title"))
+app.geometry("440x790")
 app.resizable(False, False)
 
 icon_path = get_asset_path("icon.png")
@@ -98,7 +156,7 @@ if os.path.exists(icon_path):
         app_icon = tk.PhotoImage(file=icon_path)
         app.iconphoto(False, app_icon)
     except Exception as e:
-        print("Failed to load icon:", e)
+        pass
 
 style = ttk.Style()
 if 'clam' in style.theme_names():
@@ -108,7 +166,7 @@ def get_usb_drives():
     drives = []
     try:
         output = subprocess.check_output(
-            ["lsblk", "-d", "-n", "-o", "NAME,SIZE,TRAN,MODEL"], 
+            ["lsblk", "-d", "-n", "-o", "NAME,SIZE,TRAN,MODEL"],
             text=True
         )
         for line in output.splitlines():
@@ -118,8 +176,8 @@ def get_usb_drives():
                 size = parts[1]
                 model = " ".join(parts[3:]) if len(parts) > 3 else "USB Drive"
                 drives.append(f"/dev/{dev_name} - {model} ({size})")
-    except Exception as e:
-        print("Drive scan error:", e)
+    except Exception:
+        pass
 
     if not drives:
         drives = ["No USB Drive Found!"]
@@ -130,15 +188,20 @@ def refresh_drives():
     drive_cb['values'] = usb_list
     drive_cb.current(0)
 
+def set_iso_text(text):
+    iso_entry.config(state="normal")
+    iso_entry.delete(0, tk.END)
+    iso_entry.insert(0, text)
+    iso_entry.config(state="readonly")
+
 def select_iso():
     file_path = filedialog.askopenfilename(
-        title="Select ISO Image",
+        title=tr("boot_selection"),
         filetypes=[("ISO Images", "*.iso"), ("All Files", "*.*")]
     )
     if file_path:
-        iso_entry.delete(0, tk.END)
-        iso_entry.insert(0, file_path)
-        
+        set_iso_text(file_path)
+
         iso_filename = os.path.splitext(os.path.basename(file_path))[0]
         custom_label = iso_filename[:11].replace(" ", "_").upper()
         label_entry.delete(0, tk.END)
@@ -154,7 +217,7 @@ def set_iso_mode(mode):
     global iso_action_mode
     iso_action_mode = mode
     if mode == "select":
-        btn_iso_action.config(text="BROWSE")
+        btn_iso_action.config(text=tr("browse"))
     else:
         btn_iso_action.config(text="INSTALL")
 
@@ -167,18 +230,82 @@ def update_progress(val, text=""):
         status_label.config(text=text)
     app.update_idletasks()
 
+def change_language(lang):
+    global current_lang
+    current_lang = lang
+    load_translations(lang)
+
+    app.title(tr("window_title"))
+    lbl_device.config(text=tr("target_device"))
+    btn_reset.config(text=tr("clean_usb"))
+    btn_refresh.config(text=tr("refresh"))
+    lbl_boot.config(text=tr("boot_selection"))
+    lbl_hash.config(text=tr("sha_label"))
+    btn_verify.config(text=tr("verify"))
+
+    current_text = iso_entry.get()
+    if current_text in ["Select an ISO file...", "Bir ISO dosyası seçin...", "ISO-Datei auswählen..."] or current_text == "":
+        set_iso_text(tr("select_iso_placeholder"))
+
+    btn_iso_action.config(text=tr("browse") if iso_action_mode == "select" else "INSTALL")
+    lbl_partition.config(text=tr("partition_scheme"))
+    lbl_fs.config(text=tr("target_fs"))
+    lbl_label.config(text=tr("volume_label"))
+    status_label.config(text=tr("status_ready"))
+    btn_start.config(text=tr("start_write"))
+    btn_cancel.config(text=tr("cancel"))
+    dd_check.config(text=tr("dd_mode"))
+
+    iso_menu.entryconfig(0, label=tr("menu_select"))
+    iso_menu.entryconfig(1, label=tr("menu_download"))
+
+def verify_sha_worker():
+    iso_path = iso_entry.get().strip().strip('"').strip("'")
+    expected_hash = hash_entry.get().strip().lower()
+
+    if not os.path.exists(iso_path) or os.path.isdir(iso_path):
+        messagebox.showerror("Hata", "Lütfen önce geçerli bir ISO dosyası seçin!")
+        return
+
+    if not expected_hash:
+        messagebox.showwarning("Uyarı", "Lütfen karşılaştırılacak SHA-256 kodunu yapıştırın!")
+        return
+
+    status_label.config(text="SHA-256 hesaplanıyor, lütfen bekleyin...")
+    btn_verify.config(state="disabled")
+
+    try:
+        calculated_hash = calculate_iso_sha256(
+            iso_path,
+            lambda pct: update_progress(pct, f"SHA-256 Hesaplanıyor... %{pct}")
+        )
+
+        if calculated_hash == expected_hash:
+            update_progress(100, "SHA-256 Doğrulama Başarılı!")
+            messagebox.showinfo("Bütünlük Doğrulandı", "SHA-256 Kodu Eşleşti! ISO dosyası orijinal ve hatasız.")
+        else:
+            update_progress(0, "SHA-256 Eşleşmedi!")
+            messagebox.showerror("Bütünlük Hatası", f"SHA-256 Kodu EŞLEŞMEDİ!\n\nHesaplanan: {calculated_hash}\nBeklenen: {expected_hash}")
+    except Exception as e:
+        messagebox.showerror("Hata", f"Hash hesaplanırken bir sorun oluştu:\n{str(e)}")
+    finally:
+        btn_verify.config(state="normal")
+
+def verify_sha_action():
+    threading.Thread(target=verify_sha_worker, daemon=True).start()
+
 def reset_usb_worker(selected_drive):
     try:
         dev_node = selected_drive.split()[0]
         update_progress(10, "Cleaning: Unmounting drive partitions...")
-        
+
         force_unmount_leftovers(dev_node)
         time.sleep(1)
 
         update_progress(30, "Cleaning: Wiping filesystem signatures...")
         subprocess.run(["wipefs", "-a", "-f", dev_node], capture_output=True)
         time.sleep(1)
-        
+
         update_progress(60, "Cleaning: Creating new MBR partition table...")
         subprocess.run(["parted", "-s", dev_node, "mklabel", "msdos"], check=True)
         subprocess.run(["parted", "-s", dev_node, "mkpart", "primary", "fat32", "1MiB", "100%"], check=True)
@@ -187,7 +314,7 @@ def reset_usb_worker(selected_drive):
         time.sleep(2)
 
         p1 = f"{dev_node}p1" if ("nvme" in dev_node or "mmcblk" in dev_node) else f"{dev_node}1"
-        
+
         update_progress(85, "Cleaning: Formatting as FAT32...")
         subprocess.run(["mkfs.vfat", "-F32", "-n", "RESET_USB", p1], check=True)
 
@@ -219,7 +346,7 @@ def reset_usb_action():
     btn_start.config(state="disabled")
     btn_reset.config(state="disabled")
     btn_refresh.config(state="disabled")
-    
+
     threading.Thread(target=reset_usb_worker, args=(selected_drive,), daemon=True).start()
 
 def cancel_process():
@@ -264,11 +391,11 @@ def copy_with_progress(src, dst):
                 while True:
                     if cancel_requested:
                         raise Exception("Operation cancelled by user.")
-                    
+
                     buf = fsrc.read(buffer_size)
                     if not buf:
                         break
-                    
+
                     fdst.write(buf)
                     copied_bytes += len(buf)
 
@@ -307,9 +434,37 @@ def write_iso_worker(selected_drive, iso_path):
     mount_boot, mount_data, mount_iso = "/tmp/lfus_boot", "/tmp/lfus_data", "/tmp/lfus_iso"
 
     try:
+        dev_node = selected_drive.split()[0]
+        if dd_var.get():
+            update_progress(10, "DD Mode: Cleaning lingering mounts...")
+            force_unmount_leftovers(dev_node)
+            time.sleep(1)
+
+            if cancel_requested: raise Exception("Operation cancelled by user.")
+            update_progress(30, "DD Mode: Writing raw ISO image...")
+            total_size = os.path.getsize(iso_path)
+            written = 0
+            chunk_size = 4 * 1024 * 1024
+
+            with open(iso_path, 'rb') as f_iso, open(dev_node, 'wb') as f_dev:
+                while True:
+                    if cancel_requested:
+                        raise Exception("Operation cancelled by user.")
+                    chunk = f_iso.read(chunk_size)
+                    if not chunk:
+                        break
+                    f_dev.write(chunk)
+                    written += len(chunk)
+                    pct = int((written / total_size) * 100) if total_size > 0 else 0
+                    update_progress(30 + int(pct * 0.6), f"DD Mode Writing... {pct}%")
+
+            subprocess.run(["sync"])
+            update_progress(100, "DD Mode Completed Successfully!")
+            messagebox.showinfo("Success", "Raw DD Write Complete!")
+            return
+
         custom_label = label_entry.get().strip().replace(" ", "_")
         custom_label = (custom_label if custom_label else "LINUXFUS")[:11]
-        dev_node = selected_drive.split()[0]
 
         p1 = f"{dev_node}p1" if ("nvme" in dev_node or "mmcblk" in dev_node) else f"{dev_node}1"
         p2 = f"{dev_node}p2" if ("nvme" in dev_node or "mmcblk" in dev_node) else f"{dev_node}2"
@@ -338,7 +493,7 @@ def write_iso_worker(selected_drive, iso_path):
 
         update_progress(15, "1/5: Formatting (FAT32 BOOT + NTFS DATA)...")
         subprocess.run(["mkfs.vfat", "-F32", "-n", "BOOT", p1], check=True)
-        
+
         res_ntfs = subprocess.run(["mkfs.ntfs", "-f", "-L", custom_label, p2], capture_output=True)
         if res_ntfs.returncode != 0:
             raise Exception("NTFS format failed! Ensure 'ntfs-3g' is installed.")
@@ -409,75 +564,106 @@ def start_process():
     btn_reset.config(state="disabled")
     btn_refresh.config(state="disabled")
     btn_cancel.config(state="normal")
-    
+
     threading.Thread(target=write_iso_worker, args=(selected_drive, iso_path), daemon=True).start()
 
 drive_frame = tk.Frame(app)
 drive_frame.pack(fill="x", padx=15, pady=(15, 2))
 
-tk.Label(drive_frame, text="Target Device / Drive:", font=("Segoe UI", 9, "bold")).pack(side="left")
+lbl_device = tk.Label(drive_frame, text=tr("target_device"), font=("Segoe UI", 9, "bold"))
+lbl_device.pack(side="left")
 
-btn_reset = ttk.Button(drive_frame, text="Clean USB", width=12, command=reset_usb_action)
+lang_cb = ttk.Combobox(drive_frame, values=get_available_languages(), width=4, state="readonly")
+lang_cb.set(current_lang)
+lang_cb.pack(side="right", padx=(5, 0))
+lang_cb.bind("<<ComboboxSelected>>", lambda e: change_language(lang_cb.get()))
+
+btn_reset = ttk.Button(drive_frame, text=tr("clean_usb"), width=12, command=reset_usb_action)
 btn_reset.pack(side="right", padx=(5, 0))
 
-btn_refresh = ttk.Button(drive_frame, text="Refresh", width=9, command=refresh_drives)
+btn_refresh = ttk.Button(drive_frame, text=tr("refresh"), width=9, command=refresh_drives)
 btn_refresh.pack(side="right")
 
 drive_cb = ttk.Combobox(app, state="readonly")
 drive_cb.pack(fill="x", padx=15)
 
-tk.Label(app, text="Boot Selection (ISO Image):", font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=15, pady=(10, 2))
+lbl_boot = tk.Label(app, text=tr("boot_selection"), font=("Segoe UI", 9, "bold"))
+lbl_boot.pack(anchor="w", padx=15, pady=(10, 2))
 
 iso_frame = tk.Frame(app)
 iso_frame.pack(fill="x", padx=15)
 
-iso_entry = tk.Entry(iso_frame)
-iso_entry.insert(0, "Select an ISO file...")
-iso_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+iso_entry = tk.Entry(app, state="readonly")
+set_iso_text(tr("select_iso_placeholder"))
+iso_entry.pack(in_=iso_frame, side="left", fill="x", expand=True, padx=(0, 5))
 
 btn_split_frame = tk.Frame(iso_frame)
 btn_split_frame.pack(side="right")
 
-btn_iso_action = ttk.Button(btn_split_frame, text="BROWSE", width=9, command=handle_iso_action)
+btn_iso_action = ttk.Button(btn_split_frame, text=tr("browse"), width=9, command=handle_iso_action)
 btn_iso_action.pack(side="left")
 
 btn_iso_arrow = ttk.Button(btn_split_frame, text="v", width=2, command=show_iso_menu)
 btn_iso_arrow.pack(side="right")
 
 iso_menu = tk.Menu(app, tearoff=0)
-iso_menu.add_command(label="SELECT (BROWSE)", command=lambda: set_iso_mode("select"))
-iso_menu.add_command(label="DOWNLOAD (INSTALL)", command=lambda: set_iso_mode("download"))
+iso_menu.add_command(label=tr("menu_select"), command=lambda: set_iso_mode("select"))
+iso_menu.add_command(label=tr("menu_download"), command=lambda: set_iso_mode("download"))
 
-tk.Label(app, text="Partition Scheme:", font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=15, pady=(10, 2))
+hash_frame = tk.Frame(app)
+hash_frame.pack(fill="x", padx=15, pady=(10, 2))
+
+lbl_hash = tk.Label(hash_frame, text=tr("sha_label"), font=("Segoe UI", 9, "bold"))
+lbl_hash.pack(anchor="w")
+
+hash_entry_frame = tk.Frame(hash_frame)
+hash_entry_frame.pack(fill="x", pady=(2, 0))
+
+hash_entry = tk.Entry(hash_entry_frame)
+hash_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+
+btn_verify = ttk.Button(hash_entry_frame, text=tr("verify"), width=10, command=verify_sha_action)
+btn_verify.pack(side="right")
+
+lbl_partition = tk.Label(app, text=tr("partition_scheme"), font=("Segoe UI", 9, "bold"))
+lbl_partition.pack(anchor="w", padx=15, pady=(10, 2))
 partition_cb = ttk.Combobox(app, values=["GPT (UEFI)"], state="readonly")
 partition_cb.current(0)
 partition_cb.config(state="disabled")
 partition_cb.pack(fill="x", padx=15)
 
-tk.Label(app, text="Target File System:", font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=15, pady=(10, 2))
+lbl_fs = tk.Label(app, text=tr("target_fs"), font=("Segoe UI", 9, "bold"))
+lbl_fs.pack(anchor="w", padx=15, pady=(10, 2))
 fs_cb = ttk.Combobox(app, values=["NTFS (Dual-Partition UEFI Setup)"], state="readonly")
 fs_cb.current(0)
 fs_cb.pack(fill="x", padx=15)
 
-tk.Label(app, text="Volume Label:", font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=15, pady=(10, 2))
+lbl_label = tk.Label(app, text=tr("volume_label"), font=("Segoe UI", 9, "bold"))
+lbl_label.pack(anchor="w", padx=15, pady=(10, 2))
 label_entry = tk.Entry(app)
 label_entry.insert(0, "LINUXFUS")
 label_entry.pack(fill="x", padx=15)
 
-status_label = tk.Label(app, text="Status: Ready", font=("Segoe UI", 8), fg="gray")
+status_label = tk.Label(app, text=tr("status_ready"), font=("Segoe UI", 8), fg="gray")
 status_label.pack(anchor="w", padx=15, pady=(12, 2))
 
 progress = ttk.Progressbar(app, mode="determinate")
 progress.pack(fill="x", padx=15, pady=(2, 10))
 
 btn_frame = tk.Frame(app)
-btn_frame.pack(fill="x", padx=15, pady=10)
+btn_frame.pack(fill="x", padx=15, pady=5)
 
-btn_start = ttk.Button(btn_frame, text="START WRITE", command=start_process)
+btn_start = ttk.Button(btn_frame, text=tr("start_write"), command=start_process)
 btn_start.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=5)
 
-btn_cancel = ttk.Button(btn_frame, text="CANCEL", command=cancel_process, state="disabled")
+btn_cancel = ttk.Button(btn_frame, text=tr("cancel"), command=cancel_process, state="disabled")
 btn_cancel.pack(side="right", fill="x", expand=True, padx=(5, 0), ipady=5)
+
+dd_frame = tk.Frame(app)
+dd_frame.pack(fill="x", padx=15, pady=(0, 10))
+dd_var = tk.BooleanVar(value=False)
+dd_check = ttk.Checkbutton(dd_frame, text=tr("dd_mode"), variable=dd_var)
+dd_check.pack(side="left")
 
 refresh_drives()
 app.mainloop()
