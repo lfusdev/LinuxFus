@@ -1,0 +1,20 @@
+{
+  "window_title": "LinuxFus v1.3 (Linux)",
+  "target_device": "Zielgerät / Laufwerk:",
+  "clean_usb": "Bereinigen",
+  "refresh": "Aktualisieren",
+  "boot_selection": "Startauswahl (ISO-Datei):",
+  "select_iso_placeholder": "ISO-Datei auswählen...",
+  "browse": "DURCHSUCHEN",
+  "sha_label": "SHA-256-Prüfung (Optional):",
+  "verify": "PRÜFEN",
+  "partition_scheme": "Partitionsschema:",
+  "target_fs": "Ziel-Dateisystem:",
+  "volume_label": "Bezeichnung:",
+  "status_ready": "Status: Bereit",
+  "start_write": "STARTEN",
+  "cancel": "ABBRECHEN",
+  "dd_mode": "DD-Modus (Direktes Schreiben)",
+  "menu_select": "AUSWÄHLEN (DURCHSUCHEN)",
+  "menu_download": "HERUNTERLADEN (INSTALLATION)"
+}

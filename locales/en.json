@@ -1,0 +1,20 @@
+{
+  "window_title": "LinuxFus v1.3 (Linux)",
+  "target_device": "Target Device / Drive:",
+  "clean_usb": "Clean USB",
+  "refresh": "Refresh",
+  "boot_selection": "Boot Selection (ISO Image):",
+  "select_iso_placeholder": "Select an ISO file...",
+  "browse": "BROWSE",
+  "sha_label": "SHA-256 Verification (Optional):",
+  "verify": "VERIFY",
+  "partition_scheme": "Partition Scheme:",
+  "target_fs": "Target File System:",
+  "volume_label": "Volume Label:",
+  "status_ready": "Status: Ready",
+  "start_write": "START WRITE",
+  "cancel": "CANCEL",
+  "dd_mode": "DD Mode (Raw Image Write)",
+  "menu_select": "SELECT (BROWSE)",
+  "menu_download": "DOWNLOAD (INSTALL)"
+}

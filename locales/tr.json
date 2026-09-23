@@ -1,0 +1,20 @@
+{
+  "window_title": "LinuxFus",
+  "target_device": "Hedef Sürücü",
+  "clean_usb": "Temizle",
+  "refresh": "Yenile",
+  "boot_selection": "Önyükleme Seçimi",
+  "select_iso_placeholder": "Bir ISO dosyası seçin...",
+  "browse": "Gözat",
+  "menu_select": "ISO Seç",
+  "menu_download": "ISO İndir",
+  "sha_label": "SHA-256 Doğrulama (Opsiyonel):",
+  "verify": "DOĞRULA",
+  "partition_scheme": "Bölüm Düzeni",
+  "target_fs": "Hedef Dosya Sistemi",
+  "volume_label": "Birim Etiketi",
+  "status_ready": "Hazır",
+  "start_write": "BAŞLAT",
+  "cancel": "İPTAL",
+  "dd_mode": "DD Modu"
+}
